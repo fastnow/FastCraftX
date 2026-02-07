@@ -1,4 +1,4 @@
-# FastCraftX1 - EagercraftX1.8逆向开发资源库
+# FastCraftX - EagercraftX1.8逆向开发资源库
 
 ⚠️ 逆向工程研究 | 仅供学习参考 | 请遵守相关法律法规
 
