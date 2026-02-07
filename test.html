@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html style="width:100%;height:100%;background-color:black;">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0">
+<meta name="description" content="在浏览器中免费畅玩完整版Minecraft 1.8！无需安装任何软件，无需下载客户端，即开即玩。支持中文界面和语言包选择，提供流畅的方块世界体验。优化加载速度，兼容所有现代浏览器，保留原版游戏所有特性。专为网页游戏优化的游戏平台。">
+<meta name="keywords" content="在线, 我的世界, 离线, online, offline, minecraft, 1.8, 1.8.8, Minecraft 1.8浏览器版,在线我的世界,免费网页游戏,免下载Minecraft,FastNow Studio,浏览器沙盒游戏">
+<title>FastCraftX1.8 | 免费在线玩Minecraft 1.8 | 浏览器直接启动</title>
+<meta property="og:title" content="FastCraft 1.8">
+<meta property="og:description" content="在浏览器中免费畅玩完整版Minecraft 1.8！无需下载，即开即玩。">
+
+<!-- 加载已解码的JS文件 -->
+<script type="text/javascript" src="/sdcard/Download/tools/tools/decompressed_bundle.js"></script>
+
+<script type="text/javascript">
+"use strict";
+// 基础配置
+var relayId = Math.floor(Math.random() * 3);
+window.eaglercraftXOptsHints = {
+    hintsVersion: 1,
+    container: "game_frame",
+    assetsURI: "assets.epk",
+    worldsDB: "worlds",
+    enableDownloadOfflineButton: false,
+    relays: [
+        { addr: "wss://relay.deev.is/", comment: "默认中继 #1", primary: relayId === 0 },
+        { addr: "wss://relay.lax1dude.net/", comment: "默认中继 #2", primary: relayId === 1 },
+        { addr: "wss://relay.shhnowisnottheti.me/", comment: "默认中继 #3", primary: relayId === 2 }
+    ],
+    checkRelaysForUpdates: true,
+};
+
+// ==================== BASE64 解码工具函数 ====================
+// 参考 base64.html 项目的解码逻辑
+
+// 从 data:URL 中提取纯 base64 字符串
+function extractBase64FromDataUrl(dataUrl) {
+    if (!dataUrl) return '';
+    if (dataUrl.startsWith('data:')) {
+        const idx = dataUrl.indexOf('base64,');
+        if (idx !== -1) {
+            return dataUrl.substring(idx + 7);
+        }
+        // 如果没有 base64, 前缀，尝试直接找逗号
+        const commaIdx = dataUrl.indexOf(',');
+        if (commaIdx !== -1) {
+            return dataUrl.substring(commaIdx + 1);
+        }
+    }
+    return dataUrl; // 直接返回，可能是纯 base64
+}
+
+// Base64 解码为 ArrayBuffer
+function base64ToArrayBuffer(base64) {
+    try {
+        // 提取纯 base64
+        const pureBase64 = extractBase64FromDataUrl(base64);
+        
+        // 标准 base64 解码
+        const binaryString = atob(pureBase64);
+        const len = binaryString.length;
+        const bytes = new Uint8Array(len);
+        
+        for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+        }
+        
+        return bytes.buffer;
+    } catch (error) {
+        console.error("Base64解码错误:", error);
+        // 尝试备用方法
+        try {
+            // 如果有前缀，先移除
+            let cleanBase64 = base64;
+            if (base64.startsWith('data:application/octet-stream;base64,')) {
+                cleanBase64 = base64.substring(37);
+            }
+            
+            const binaryString = atob(cleanBase64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            
+            return bytes.buffer;
+        } catch (e2) {
+            console.error("备用解码也失败:", e2);
+            return null;
+        }
+    }
+}
+
+// Base64 解码为文本
+function base64ToText(base64) {
+    try {
+        const pureBase64 = extractBase64FromDataUrl(base64);
+        return atob(pureBase64);
+    } catch (error) {
+        console.error("Base64转文本失败:", error);
+        return null;
+    }
+}
+
+// 分析文件类型
+function analyzeFileType(arrayBuffer) {
+    const arr = new Uint8Array(arrayBuffer);
+    let type = "未知";
+    let isGzip = false;
+    
+    if (arr.length >= 2) {
+        // 检查 GZIP 魔数 (0x1F 0x8B)
+        if (arr[0] === 0x1F && arr[1] === 0x8B) {
+            type = "GZIP 压缩文件";
+            isGzip = true;
+        }
+        // 检查 EAGLERCRAFT 签名魔数
+        else if (arr[0] === 0x45 && arr[1] === 0x41 && arr[2] === 0x47 && arr[3] === 0x53) {
+            type = "Eaglercraft 签名文件";
+        }
+        // 检查常见的文件类型
+        else if (arr[0] === 0x50 && arr[1] === 0x4B && arr[2] === 0x03 && arr[3] === 0x04) {
+            type = "ZIP/EPK 文件";
+        }
+    }
+    
+    let magic = "";
+    for (let i = 0; i < Math.min(8, arr.length); i++) {
+        magic += arr[i].toString(16).padStart(2, '0') + " ";
+    }
+    
+    return {
+        type: type,
+        size: arrayBuffer.byteLength,
+        magic: magic.trim(),
+        isGzip: isGzip
+    };
+}
+
+// GZIP 解压
+async function decompressGzip(arrayBuffer) {
+    if (typeof DecompressionStream === 'undefined') {
+        throw new Error("浏览器不支持 DecompressionStream API");
+    }
+    
+    try {
+        const ds = new DecompressionStream('gzip');
+        const stream = new Blob([arrayBuffer]).stream().pipeThrough(ds);
+        return await new Response(stream).arrayBuffer();
+    } catch (error) {
+        console.error("GZIP 解压失败:", error);
+        throw error;
+    }
+}
+
+// 模拟原代码中的 XHR 函数，支持 data:URL
+function doXHR(url, callback) {
+    if (url.startsWith('data:')) {
+        // 处理 data:URL
+        setTimeout(function() {
+            try {
+                const arrayBuffer = base64ToArrayBuffer(url);
+                if (arrayBuffer) {
+                    callback(arrayBuffer);
+                } else {
+                    console.warn("无法解码 data:URL:", url.substring(0, 100) + "...");
+                    callback(null);
+                }
+            } catch (e) {
+                console.error("处理 data URL 失败:", e);
+                callback(null);
+            }
+        }, 0);
+    } else {
+        // 处理普通 URL
+        const xhr = new XMLHttpRequest();
+        xhr.responseType = 'arraybuffer';
+        xhr.onload = function() {
+            if (xhr.status === 200) {
+                callback(xhr.response);
+            } else {
+                console.warn("XHR 请求失败:", xhr.status, url);
+                callback(null);
+            }
+        };
+        xhr.onerror = function() {
+            console.error("XHR 网络错误:", url);
+            callback(null);
+        };
+        xhr.open('GET', url, true);
+        xhr.send();
+    }
+}
+
+// 拦截 fetch 请求，处理 base64 data:URL
+function setupFetchInterceptor() {
+    const originalFetch = window.fetch;
+    
+    window.fetch = function(resource, init) {
+        if (typeof resource === 'string' && resource.startsWith('data:application/octet-stream;base64,')) {
+            console.log("拦截到 base64 资源请求");
+            
+            return new Promise(function(resolve, reject) {
+                const arrayBuffer = base64ToArrayBuffer(resource);
+                if (arrayBuffer) {
+                    resolve(new Response(arrayBuffer, {
+                        status: 200,
+                        statusText: 'OK',
+                        headers: new Headers({
+                            'Content-Type': 'application/octet-stream'
+                        })
+                    }));
+                } else {
+                    reject(new Error("Base64 解码失败"));
+                }
+            });
+        }
+        
+        // 默认行为
+        return originalFetch.apply(this, arguments);
+    };
+}
+
+// ==================== 游戏启动逻辑 ====================
+
+// 页面加载完成后的初始化
+window.addEventListener('load', function() {
+    console.log("FastCraftX 1.8 - 页面加载完成");
+    
+    // 设置 fetch 拦截器
+    setupFetchInterceptor();
+    
+    // 启动倒计时显示
+    var countdown = 10;
+    var countdownElement = document.getElementById('launchCountdownNumber');
+    var progressElement = document.getElementById('launchCountdownProgress');
+    var launchText = document.getElementById('gameWillLaunchIn');
+    
+    if (countdownElement && progressElement) {
+        var countdownInterval = setInterval(function() {
+            countdown--;
+            countdownElement.textContent = countdown;
+            var progressPercent = 100 - (countdown * 10);
+            progressElement.style.width = progressPercent + '%';
+            
+            if (countdown <= 0) {
+                clearInterval(countdownInterval);
+                if (launchText) {
+                    launchText.textContent = '加载中...';
+                }
+                
+                // 移除加载界面
+                setTimeout(function() {
+                    var launchScreen = document.getElementById('launch_countdown_screen');
+                    if (launchScreen) {
+                        launchScreen.style.transition = 'opacity 0.5s ease';
+                        launchScreen.style.opacity = '0';
+                        setTimeout(function() {
+                            if (launchScreen.parentNode) {
+                                launchScreen.parentNode.removeChild(launchScreen);
+                            }
+                            document.body.style.backgroundColor = 'black';
+                            
+                            // 触发游戏启动事件
+                            setTimeout(function() {
+                                var event = new Event('eaglercraftClientStarted');
+                                window.dispatchEvent(event);
+                                console.log("游戏启动事件已触发");
+                            }, 300);
+                        }, 500);
+                    }
+                }, 500);
+            }
+        }, 1000);
+    }
+    
+    // 跳过按钮事件
+    var skipBtn = document.getElementById('skipCountdown');
+    if (skipBtn) {
+        skipBtn.addEventListener('click', function() {
+            var launchScreen = document.getElementById('launch_countdown_screen');
+            if (launchScreen) {
+                launchScreen.style.transition = 'opacity 0.3s ease';
+                launchScreen.style.opacity = '0';
+                setTimeout(function() {
+                    if (launchScreen.parentNode) {
+                        launchScreen.parentNode.removeChild(launchScreen);
+                    }
+                    document.body.style.backgroundColor = 'black';
+                    
+                    // 触发游戏启动事件
+                    var event = new Event('eaglercraftClientStarted');
+                    window.dispatchEvent(event);
+                    console.log("游戏启动事件已触发（跳过）");
+                }, 300);
+            }
+        });
+    }
+    
+    // 菜单按钮事件
+    var menuBtn = document.getElementById('bootMenu');
+    if (menuBtn) {
+        menuBtn.addEventListener('click', function() {
+            window.eaglercraftXOptsHints.showBootMenuOnLaunch = true;
+            var launchScreen = document.getElementById('launch_countdown_screen');
+            if (launchScreen) {
+                launchScreen.style.transition = 'opacity 0.3s ease';
+                launchScreen.style.opacity = '0';
+                setTimeout(function() {
+                    if (launchScreen.parentNode) {
+                        launchScreen.parentNode.removeChild(launchScreen);
+                    }
+                    document.body.style.backgroundColor = 'black';
+                    
+                    // 触发游戏启动事件
+                    var event = new Event('eaglercraftClientStarted');
+                    window.dispatchEvent(event);
+                    console.log("游戏启动事件已触发（菜单）");
+                }, 300);
+            }
+        });
+    }
+    
+    // 全屏按钮事件
+    var fullscreenBtn = document.getElementById('fullscreenBtn');
+    if (fullscreenBtn) {
+        fullscreenBtn.addEventListener('click', function() {
+            toggleFullScreen();
+        });
+    }
+    
+    // 强制启动游戏（备用）- 30秒后如果还在加载界面，强制启动
+    setTimeout(function() {
+        if (document.getElementById('launch_countdown_screen')) {
+            console.log("30秒超时，强制启动游戏...");
+            var launchScreen = document.getElementById('launch_countdown_screen');
+            if (launchScreen) {
+                if (launchScreen.parentNode) {
+                    launchScreen.parentNode.removeChild(launchScreen);
+                }
+                document.body.style.backgroundColor = 'black';
+                
+                // 触发游戏启动事件
+                var event = new Event('eaglercraftClientStarted');
+                window.dispatchEvent(event);
+                console.log("游戏强制启动");
+            }
+        }
+    }, 30000); // 30秒后强制启动
+});
+
+// 确保游戏能接收到启动事件
+window.addEventListener('eaglercraftClientStarted', function() {
+    console.log("Eaglercraft 客户端启动事件收到");
+    
+    // 尝试触发游戏初始化
+    if (typeof window.eaglercraftXOpts !== 'undefined') {
+        console.log("Eaglercraft 配置已存在");
+    }
+});
+
+// 全局错误处理
+window.addEventListener('error', function(event) {
+    console.error("全局错误:", event.message, "at", event.filename, ":", event.lineno);
+    
+    // 如果是 base64 相关错误，尝试提供更多信息
+    if (event.message.includes('base64') || event.message.includes('atob')) {
+        console.warn("检测到 base64 解码错误，尝试修复...");
+    }
+});
+
+// 全屏切换函数
+function toggleFullScreen() {
+    const elem = document.getElementById("game_frame");
+    if (!elem) {
+        console.error("找不到 game_frame 元素");
+        return;
+    }
+    
+    if (!document.fullscreenElement) {
+        if (elem.requestFullscreen) {
+            elem.requestFullscreen().catch(err => {
+                console.log(`全屏请求失败: ${err.message}`);
+            });
+        } else if (elem.mozRequestFullScreen) { /* Firefox */
+            elem.mozRequestFullScreen();
+        } else if (elem.webkitRequestFullscreen) { /* Chrome, Safari & Opera */
+            elem.webkitRequestFullscreen();
+        } else if (elem.msRequestFullscreen) { /* IE/Edge */
+            elem.msRequestFullscreen();
+        }
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        } else if (document.mozCancelFullScreen) { /* Firefox */
+            document.mozCancelFullScreen();
+        } else if (document.webkitExitFullscreen) { /* Chrome, Safari & Opera */
+            document.webkitExitFullscreen();
+        } else if (document.msExitFullscreen) { /* IE/Edge */
+            document.msExitFullscreen();
+        }
+    }
+}
+
+console.log("FastCraftX 1.8 - 初始化脚本已加载");
+</script>
+
+<style type="eaglercraft" id="eaglercraftXClientSignature">data:application/octet-stream;base64,RUFHU0lHAAE8KWGumw9XewsBzd0YHnyTAZRIyInTKIIx1INaNUgLJqnvyDPvgH19gmhLGnc5EADmkyjnmSgnRGfl9WxEbY9RyiFhJkWifWX9iygiXPAtyfbR+wzHqmzUwIThnBDNp13/BfjKD/YwCxS5RiJqju4wS5Pig2KevmPM94AQtHx7hOtfcLOyfStm2HfzXXXJq7R3PDcOqp1YDN9fgLqGAgulAwPuyFUmWwkLxwSPl4T0yMj0fU4zE9niBn27MF+0gf6IMx/+zg0IXKFwyGcGpJVMKKZlnrl6dBIEMXq/SNn1KJkR8O52xUoWEk+r+RuCrncrkKWP7GgXrwdSjtn9oheuAoofiwgAAAAAAAD/Y2BgnP4wed8UhrMtTEVabx4uqrl7dMkB/8IV8rZeE+MdF8t0iXHMVBVnk806+pBBJS+1RC8nscIwpTQlVS81MT0ntSi5KDGtRK/MMN5CLzknMzWvhEHAFSERoWCoZ8HAAdPDwMBgysBcamrMoOWZW1CUX5aaouAWEKzjUJSaUpoM5CTn55WkVpQo5OQXFysATSjOSC3umRxsdnyx6lLBOfsMg/vlON9c/nJJMyLCXufnnwzVbpcL/UpPRPn/Pv289W46l0zA5h+F37tYA6f/tRZfF7Ha7Oa/ZcsCAia/K1vYXxqtXzFpczyDuc+7sIcCIi0fDHOeO2cVS0z4J5lzwz/jv+gNa7n3ManVT9zOet7PF+ZSMQ0Q/HQ+VqdBe9oqGaPvW/5Md9P4A/QBb+jZV90MLDmZxSUM+hklJQXFVvr6yIGRnJ+rn5Kjn5xfVKwP9Gt8UmJydmmBHkhD0GLtDAaWzIK0YgbrpMS0yqTUzNSqXLPS5LTMgqycpFzz5CzjlFRTk0rTQpOMyrLy5MrU3KICs8yC4kTTlJwK84LEUuNC41TpBTwbGbhLi1N10xNLUssTKxk0YQ6BCuiB7NDLzNcH0foqyZkpKvoqBYklGSp914/wo+pVg+k1SS1LLcpJzEvBqrF2A3chqkZlmMaU8tQkoP/ysjF1fXE9vApVly5MV3JOfmlKWk5iUaou2LWgcMPQX61XzI6qXxWuPw2Pvrl//neh6lOC6Ss3LsbhWJcb6vE4wjUvraS4JL8oMT0Vh94LmsWqOPSClUFiBD16IHo1d7Kx4whaJL2IUIbomvl1nT+OoEHShRxKEH0JRfmihF2K7mGIXgBFyDDFMAQAAA==</style>
+
+<img src="data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo+AjIqgtObDoKrarYqMyP/L2u71////m8H////6/+b9//j/2wBDASstLTw1PHZBQXb4pYyl+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj4+Pj/wAARCABLAEsDASIAAhEBAxEB/8QAGQABAAMBAQAAAAAAAAAAAAAAAAIDBAUB/8QAKhAAAgICAQMBCAMBAAAAAAAAAAECAwQRIRSTMaEFFCIyQVFhgSNScdH/xAAUAQEAAAAAAAAAAAAAAAAAAAAA/8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAwDAQACEQMRAD8A7IAAAAAAAAAAAAAAAAAAAAAAAAAAxe1NOuhOLmnctxXl8PgY0K63OcMWVMlF/FOXD9WaraY3dvq38E1Na+6F1Ub6ZVT30yWnoDFj59k8mNUnVYpJtdtNa1+X5JY+XfdNxk6Yz0/45JqUX9P9LY4SVlc3ddJ1rUdtePt4Cwo92uc7bbHW24qbT1v9bA58pXz9mZLtmmu5pPb2n1L0LLbpxp91uk3bXZDUv7x3w/8Aprfs+twth3LOix9TjtaT3vjgnk4lWS65WbTrluLQFE8vIl7xOiNfaobT697k0uTyWfKKnJxXS6VbX9+eNP8Aei2zBrnKxqyyCs+eMGkpehK7Cpu7SkmlV8qi/pxw/wAcAU15l03TW4wVsrJQn50lHzr0NxRDErhlSyE5dUvpvheNtfngvAAAAAAAAAAAAAAAAAAAAAAAAAAAD//Z"/>
+</head>
+<body style="margin:0px;width:100%;height:100%;overflow:hidden;background-color:white;" id="game_frame">
+<div style="margin:0;width:100%;height:100%;font-family:sans-serif;display:flex;align-items:center;user-select:none" id="launch_countdown_screen">
+<div style="margin:auto;text-align:center;max-width:600px">
+<h1 style="font-size:36px;margin:0 0 10px 0">FastCraftX1.8</h1>
+<h3 style="font-size:16px;margin:0 0 40px 0;color:#666;line-height:1.4">中文语言包文件较大，启用后可能影响游戏流畅度。<br>为获得最佳体验，本站默认使用英文界面。如需中文，请在游戏内自行设置。<br>优化：<a href="https://fastnow.github.io" style="color:#0086FF">FastNow Studio</a><br>特别鸣谢：<a href="https://eaglercraft.com" style="color:#0086FF">eaglercraft.com</a></h3>
+<h2 id="gameWillLaunchIn" style="font-size:24px;margin:0 0 30px 0">游戏将会于 <span id="launchCountdownNumber" style="color:#0086FF;font-weight:bold">10</span> 秒后启动...</h2>
+<div style="border:2px solid #333;width:100%;height:18px;padding:1px;margin-bottom:60px">
+<div id="launchCountdownProgress" style="background-color:#555;width:0%;height:100%"></div></div><div>
+<button id="skipCountdown" style="margin:0 10px;padding:8px 25px;font-size:16px" autofocus>游戏</button>
+<button id="bootMenu" style="margin:0 10px;padding:8px 25px;font-size:16px">菜单</button>
+<button id="fullscreenBtn" style="margin:0 10px;padding:8px 25px;font-size:16px" onclick="toggleFullScreen()">全屏</button></div></div></div>
+
+<script>
+function toggleFullScreen() {
+  const elem = document.getElementById("game_frame");
+  if (!document.fullscreenElement) {
+    if (elem.requestFullscreen) {
+      elem.requestFullscreen();
+    } else if (elem.mozRequestFullScreen) {
+      elem.mozRequestFullScreen();
+    } else if (elem.webkitRequestFullscreen) {
+      elem.webkitRequestFullscreen();
+    } else if (elem.msRequestFullscreen) {
+      elem.msRequestFullscreen();
+    }
+  } else {
+    if (document.exitFullscreen) {
+      document.exitFullscreen();
+    } else if (document.mozCancelFullScreen) {
+      document.mozCancelFullScreen();
+    } else if (document.webkitExitFullscreen) {
+      document.webkitExitFullscreen();
+    } else if (document.msExitFullscreen) {
+      document.msExitFullscreen();
+    }
+  }
+}
+</script>
+</body>
+</html>
